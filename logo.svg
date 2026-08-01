@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- 背景单色 -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#dbeafe"/>
+    </linearGradient>
+
+    <!-- 卡片正面渐变（顶部白 → 底部灰） -->
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="50%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#dde4ed"/>
+    </linearGradient>
+
+    <!-- 卡片顶部高光带 -->
+    <linearGradient id="cardHighlight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- 卡片蓝色边框渐变（左上亮 → 右下暗） -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="50%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#1e3a5f"/>
+    </linearGradient>
+
+    <!-- 三条信息条：深浅渐变依次递减 -->
+    <linearGradient id="barGrad1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#93c5fd"/>
+      <stop offset="35%" stop-color="#3b82f6"/>
+      <stop offset="70%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#1e3a5f"/>
+    </linearGradient>
+    <linearGradient id="barGrad2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#bfdbfe"/>
+      <stop offset="35%" stop-color="#60a5fa"/>
+      <stop offset="70%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="barGrad3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#dbeafe"/>
+      <stop offset="35%" stop-color="#93c5fd"/>
+      <stop offset="70%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+
+    <!-- 头像内部径向渐变（光泽球感） -->
+    <radialGradient id="faceGrad" cx="35%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="50%" stop-color="#dbeafe"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </radialGradient>
+
+    <!-- 头像右下阴影覆盖（增强球体感） -->
+    <radialGradient id="faceShadow" cx="70%" cy="75%" r="45%">
+      <stop offset="0%" stop-color="#1e3a5f" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#1e3a5f" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 笑脸头部渐变（金属光泽） -->
+    <radialGradient id="smileGrad" cx="35%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="50%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#1e3a5f"/>
+    </radialGradient>
+
+    <!-- 卡片投影（柔和、长偏移） -->
+    <filter id="cardShadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+      <feOffset dx="4" dy="10" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.5"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- 信息条凸起投影 -->
+    <filter id="barShadow" x="-15%" y="-15%" width="130%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="1.5"/>
+      <feOffset dx="2" dy="3" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.65"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- 头像投影 -->
+    <filter id="ringShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
+      <feOffset dx="3" dy="5" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.55"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 背景（径向渐变产生柔和立体感） -->
+  <rect width="512" height="512" rx="140" fill="url(#bgGrad)"/>
+
+  <!-- 卡片：渐变填充 + 渐变描边 + 顶部高光 + 整体投影 -->
+  <g filter="url(#cardShadow)">
+    <rect x="96" y="136" width="320" height="240" rx="28" fill="url(#cardGrad)"/>
+    <rect x="96" y="136" width="320" height="240" rx="28" fill="none" stroke="url(#borderGrad)" stroke-width="8"/>
+    <rect x="106" y="146" width="300" height="70" rx="22" fill="url(#cardHighlight)"/>
+  </g>
+
+  <!-- 信息条：凸起（渐变 + 投影） -->
+  <g filter="url(#barShadow)">
+    <rect x="136" y="204" width="120" height="18" rx="9" fill="url(#barGrad1)"/>
+    <rect x="136" y="236" width="90" height="18" rx="9" fill="url(#barGrad3)"/>
+    <rect x="136" y="268" width="140" height="18" rx="9" fill="url(#barGrad2)"/>
+  </g>
+
+  <!-- 头像：金属环 + 抛光内圈 + 右下阴影 -->
+  <g filter="url(#ringShadow)">
+    <circle cx="330" cy="248" r="52" fill="url(#faceGrad)"/>
+    <circle cx="330" cy="248" r="52" fill="url(#faceShadow)"/>
+  </g>
+
+  <!-- 笑脸：金属渐变球 + 上扬弧线 -->
+  <circle cx="330" cy="226" r="22" fill="url(#smileGrad)"/>
+  <path d="M296,276 Q330,256 364,276" fill="none" stroke="#1e40af" stroke-width="9" stroke-linecap="round"/>
+</svg>

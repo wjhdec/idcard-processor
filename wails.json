@@ -1,0 +1,18 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "idcard-processor",
+  "outputfilename": "idcard-processor",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "wjhdec",
+    "email": "wjhdec@163.com"
+  },
+  "info": {
+    "productName": "身份证图片处理器",
+    "description": "交互式身份证照片处理工具",
+    "comments": "拖动角点到身份证四角，自动透视修正并输出标准尺寸"
+  }
+}
