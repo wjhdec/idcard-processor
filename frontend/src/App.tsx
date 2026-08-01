@@ -1,3 +1,6 @@
+// Copyright 2026 wjhdec
+// SPDX-License-Identifier: Apache-2.0
+
 import { useState, useRef, useEffect, useCallback } from 'react';
 import './App.css';
 import { SelectInputFile, ProcessImage, SelectOutputFile, GetDefaultDPI, LoadImage, DetectCorners } from '../wailsjs/go/main/App';

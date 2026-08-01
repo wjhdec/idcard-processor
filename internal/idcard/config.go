@@ -1,3 +1,6 @@
+// Copyright 2026 wjhdec
+// SPDX-License-Identifier: Apache-2.0
+
 package idcard
 
 // 身份证标准尺寸（单位：毫米）
