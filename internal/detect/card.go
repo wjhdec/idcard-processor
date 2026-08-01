@@ -20,33 +20,43 @@ func DetectCorners(src image.Image) ([4]image.Point, error) {
 	// 转换为灰度图
 	gray := ToGrayscale(src)
 
-	// ==================== 策略 1: Canny 边缘检测 ====================
-	log.Println("策略1: Canny 边缘检测...")
-	if corners, found := tryCannyDetection(gray, imgW, imgH, aspectRatio); found {
+	// ==================== 策略 1: Canny 边缘 + 霍夫直线检测 ====================
+	// 不依赖边缘连通性（连通分量法对边缘断裂、背景杂乱敏感），
+	// 通过直线求交直接获得边界角点
+	log.Println("策略1: 霍夫直线检测...")
+	if corners, found := tryHoughDetection(gray, imgW, imgH, aspectRatio); found {
 		log.Printf("策略1 成功，角点: %v", corners)
 		return corners, nil
 	}
-	log.Println("策略1 失败，尝试亮度分割...")
+	log.Println("策略1 失败，尝试 Canny 连通分量...")
 
-	// ==================== 策略 2: 亮度分割（卡片比背景亮） ====================
-	log.Println("策略2: 亮度分割（亮目标）...")
-	if corners, found := tryIntensityDetection(gray, imgW, imgH, aspectRatio, false); found {
+	// ==================== 策略 2: Canny 连通分量 ====================
+	log.Println("策略2: Canny 边缘检测...")
+	if corners, found := tryCannyDetection(gray, imgW, imgH, aspectRatio); found {
 		log.Printf("策略2 成功，角点: %v", corners)
 		return corners, nil
 	}
-	log.Println("策略2 失败，尝试反向亮度分割...")
+	log.Println("策略2 失败，尝试亮度分割...")
 
-	// ==================== 策略 3: 反向亮度分割（卡片比背景暗） ====================
-	log.Println("策略3: 反向亮度分割（暗目标）...")
-	if corners, found := tryIntensityDetection(gray, imgW, imgH, aspectRatio, true); found {
+	// ==================== 策略 3: 亮度分割（卡片比背景亮） ====================
+	log.Println("策略3: 亮度分割（亮目标）...")
+	if corners, found := tryIntensityDetection(gray, imgW, imgH, aspectRatio, false); found {
 		log.Printf("策略3 成功，角点: %v", corners)
 		return corners, nil
 	}
-	log.Println("策略3 失败，尝试模板定位...")
+	log.Println("策略3 失败，尝试反向亮度分割...")
 
-	// ==================== 策略 4: 颜色模板定位 ====================
-	if corners, found := tryTemplateDetection(src, imgW, imgH, aspectRatio); found {
+	// ==================== 策略 4: 反向亮度分割（卡片比背景暗） ====================
+	log.Println("策略4: 亮度分割（暗目标）...")
+	if corners, found := tryIntensityDetection(gray, imgW, imgH, aspectRatio, true); found {
 		log.Printf("策略4 成功，角点: %v", corners)
+		return corners, nil
+	}
+	log.Println("策略4 失败，尝试模板定位...")
+
+	// ==================== 策略 5: 颜色模板定位 ====================
+	if corners, found := tryTemplateDetection(src, imgW, imgH, aspectRatio); found {
+		log.Printf("策略5 成功，角点: %v", corners)
 		return corners, nil
 	}
 
@@ -84,37 +94,9 @@ func tryTemplateDetection(src image.Image, imgW, imgH int, aspectRatio float64) 
 		return [4]image.Point{}, false
 	}
 
-	// 使用凸包+DP获得初始角点
-	hull := convexHull(whiteComponent)
-	if len(hull) < 4 {
-		return [4]image.Point{}, false
-	}
-
-	imgDiagonal := math.Sqrt(float64(imgW*imgW + imgH*imgH))
-	epsilon := imgDiagonal * 0.02
-	corners := SimplifyContour(hull, epsilon)
-
-	for len(corners) > 4 && epsilon < imgDiagonal*0.3 {
-		epsilon += imgDiagonal * 0.02
-		corners = SimplifyContour(hull, epsilon)
-	}
-
-	if len(corners) < 4 {
-		return [4]image.Point{}, false
-	}
-
-	var temp [4]image.Point
-	for i := 0; i < 4 && i < len(corners); i++ {
-		temp[i] = corners[i]
-	}
-	ordered := CornerOrder(temp)
-
-	log.Printf("  模板定位: 白色区域=%dpx 角点=%v", len(whiteComponent), ordered)
-
-	if corners, ok := validateCorners(ordered[:], imgW, imgH, aspectRatio); ok {
-		return corners, true
-	}
-	if corners, ok := validateCornersRelaxed(ordered[:], imgW, imgH, aspectRatio); ok {
+	// 复用统一的高精度角点提取（候选四边形穷举 + 边中央段直线拟合）
+	if corners, ok := findCornersFromComponent(whiteComponent, imgW, imgH, aspectRatio); ok {
+		log.Printf("  模板定位: 白色区域=%dpx 角点=%v", len(whiteComponent), corners)
 		return corners, true
 	}
 
@@ -174,6 +156,13 @@ func tryCannyDetection(gray *image.Gray, imgW, imgH int, aspectRatio float64) ([
 			continue
 		}
 
+		// 面积门限：身份证应占据画面相当比例，score≈凸包面积×矩形度；
+		// 过小的分量是边缘碎片（如旋转边缘的阶梯断裂），让后续策略处理
+		if score < float64(imgW*imgH)*0.15 {
+			log.Printf("  Canny(sigma=%.1f) 得分=%.0f, 分量过小跳过", sigma, score)
+			continue
+		}
+
 		if corners, found := findCornersFromComponent(component, imgW, imgH, aspectRatio); found {
 			log.Printf("  Canny(sigma=%.1f) 得分=%.0f, 找到角点", sigma, score)
 			return corners, true
@@ -227,4 +216,73 @@ func tryIntensityDetection(gray *image.Gray, imgW, imgH int, aspectRatio float64
 	}
 
 	return [4]image.Point{}, false
+}
+
+// tryHoughDetection 使用 Canny 边缘 + 霍夫直线检测定位身份证边界
+// 不依赖边缘连通性：即使边缘断裂、被遮挡或背景杂乱，只要四条边存在足够长的
+// 直线边缘即可恢复边界；检测到的直线经聚类选择后求交得角点，再用边中央段
+// IRLS 直线拟合精化。
+func tryHoughDetection(gray *image.Gray, imgW, imgH int, targetAspect float64) ([4]image.Point, bool) {
+	sigmas := []float64{1.0, 1.5, 0.8}
+	for _, sigma := range sigmas {
+		edges := CannyEdges(gray, sigma, 0.5)
+		// 清除图像边框像素，避免把照片边框误检为卡片边界
+		clearEdgesNearBorder(edges, 2)
+
+		diag := math.Sqrt(float64(imgW*imgW + imgH*imgH))
+		minVotes := int(diag * 0.08)
+		if minVotes < 40 {
+			minVotes = 40
+		}
+		lines := houghLines(edges, minVotes)
+		if len(lines) < 4 {
+			continue
+		}
+
+		quad, ok := selectCardLines(lines, imgW, imgH, targetAspect)
+		if !ok {
+			continue
+		}
+		initOrdered := CornerOrder(lineQuadCorners(quad))
+
+		// 用边缘点集 + 边中央段 IRLS 精化
+		edgePts := collectEdgePoints(edges)
+		refined := refineCornersByLineFitting(edgePts, initOrdered, imgW, imgH)
+		if corners, ok := finalizeCorners(initOrdered, refined, imgW, imgH, targetAspect); ok {
+			log.Printf("  Hough(sigma=%.1f) 直线=%d, 找到角点", sigma, len(lines))
+			return corners, true
+		}
+		log.Printf("  Hough(sigma=%.1f) 直线=%d, 未通过角点验证", sigma, len(lines))
+	}
+
+	return [4]image.Point{}, false
+}
+
+// clearEdgesNearBorder 清除二值边缘图边框附近的像素（防止照片边框被霍夫检成卡片边界）
+func clearEdgesNearBorder(img *image.Gray, margin int) {
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	black := color.Gray{Y: 0}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if x < margin || x >= w-margin || y < margin || y >= h-margin {
+				img.SetGray(x, y, black)
+			}
+		}
+	}
+}
+
+// collectEdgePoints 收集二值边缘图中的所有边缘像素坐标
+func collectEdgePoints(edges *image.Gray) []image.Point {
+	bounds := edges.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	var pts []image.Point
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if edges.GrayAt(x, y).Y > 0 {
+				pts = append(pts, image.Point{X: x, Y: y})
+			}
+		}
+	}
+	return pts
 }

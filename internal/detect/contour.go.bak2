@@ -120,7 +120,7 @@ func FindLargestComponentArea(binary *image.Gray, minAreaRatio float64) ([]image
 
 				// 计算矩形度（凸包面积 / 外接矩形面积）
 				minX, minY, maxX, maxY := boundsOf(comp)
-				bboxArea := float64((maxX - minX + 1) * (maxY - minY + 1))
+				bboxArea := float64((maxX-minX+1)*(maxY-minY+1))
 				rectangularity := hullArea / bboxArea
 
 				// 矩形度应该接近1（矩形），但考虑到透视可能低一些
@@ -297,161 +297,46 @@ func CornerOrder(corners [4]image.Point) [4]image.Point {
 	}
 }
 
-// findBestQuadFromHull 穷举凸包顶点的 4 顶点组合，按"面积大 × 角度接近 90° × 宽高比接近标准"
-// 评分选出最优四边形作为初始角点。
-// 相比 Douglas-Peucker 简化，结果与凸包遍历起点无关、旋转稳定，不会因噪声顶点错选角点。
-func findBestQuadFromHull(hull []image.Point, imgW, imgH int, targetAspect float64) ([4]image.Point, bool) {
-	n := len(hull)
-	if n < 4 {
-		return [4]image.Point{}, false
-	}
-
-	// 顶点过多时先用 DP 简化到 ≤ 20 个，保证穷举可行（C(20,4)=4845）
-	if n > 20 {
-		imgDiagonal := math.Sqrt(float64(imgW*imgW + imgH*imgH))
-		epsilon := imgDiagonal * 0.005
-		reduced := SimplifyContour(hull, epsilon)
-		for len(reduced) > 20 && epsilon < imgDiagonal*0.1 {
-			epsilon += imgDiagonal * 0.005
-			reduced = SimplifyContour(hull, epsilon)
-		}
-		if len(reduced) >= 4 {
-			hull = reduced
-			n = len(hull)
-		}
-	}
-	if n > 20 {
-		return [4]image.Point{}, false // 仍太多，交给 DP 兜底
-	}
-
-	best := [4]image.Point{}
-	bestScore := 0.0
-	imgArea := float64(imgW * imgH)
-
-	for i := 0; i < n-3; i++ {
-		for j := i + 1; j < n-2; j++ {
-			for k := j + 1; k < n-1; k++ {
-				for l := k + 1; l < n; l++ {
-					quad := [4]image.Point{hull[i], hull[j], hull[k], hull[l]}
-					if score := quadScore(quad, imgArea, targetAspect); score > bestScore {
-						bestScore = score
-						best = quad
-					}
-				}
-			}
-		}
-	}
-
-	if bestScore <= 0 {
-		return [4]image.Point{}, false
-	}
-	return best, true
-}
-
-// quadScore 评估四边形得分：面积占比 × 角度矩形度（高斯衰减）× 宽高比匹配度（对数域高斯）
-func quadScore(quad [4]image.Point, imgArea float64, targetAspect float64) float64 {
-	area := polygonArea(quad[:])
-	if area < 4 {
-		return 0
-	}
-	areaScore := math.Min(area/imgArea, 1.0)
-
-	// 角度接近 90° 的矩形度
-	angleScore := 1.0
-	for i := 0; i < 4; i++ {
-		a := quad[i]
-		b := quad[(i+1)%4]
-		c := quad[(i+2)%4]
-		v1x := float64(b.X - a.X)
-		v1y := float64(b.Y - a.Y)
-		v2x := float64(c.X - b.X)
-		v2y := float64(c.Y - b.Y)
-		len1 := math.Hypot(v1x, v1y)
-		len2 := math.Hypot(v2x, v2y)
-		if len1 == 0 || len2 == 0 {
-			return 0
-		}
-		cosA := (v1x*v2x + v1y*v2y) / (len1 * len2)
-		if cosA < -1 {
-			cosA = -1
-		}
-		if cosA > 1 {
-			cosA = 1
-		}
-		d := math.Acos(cosA)*180/math.Pi - 90
-		angleScore *= math.Exp(-(d * d) / (2 * 15 * 15))
-	}
-
-	// 宽高比匹配（对边平均长度之比，对数域高斯，容忍透视变形）
-	w1 := distance(quad[0], quad[1])
-	w2 := distance(quad[3], quad[2])
-	h1 := distance(quad[0], quad[3])
-	h2 := distance(quad[1], quad[2])
-	width := (w1 + w2) / 2
-	height := (h1 + h2) / 2
-	if width <= 0 || height <= 0 {
-		return 0
-	}
-	aspect := width / height
-	ln := math.Log(aspect / targetAspect)
-	aspectScore := math.Exp(-(ln * ln) / (2 * 0.35 * 0.35))
-
-	return areaScore * angleScore * aspectScore
-}
-
 // findCornersFromComponent 从连通分量中提取四个角点（改进版）
-// 流程：候选四边形穷举（旋转稳定）→ 边中央段直线拟合（避开圆角弧段）→ 直线求交获得精确角点
+// 步骤：二分图边界追踪 → 4 段分割 → 直线拟合 → 求交获得精确角点
 func findCornersFromComponent(component []image.Point, imgW, imgH int, targetAspect float64) ([4]image.Point, bool) {
 	if len(component) < 50 {
 		return [4]image.Point{}, false
 	}
 
+	// 用凸包 + DP 简化获得初始角点（用于边界分段）
 	hull := convexHull(component)
 	if len(hull) < 4 {
 		return [4]image.Point{}, false
 	}
 
-	// 方式 A：穷举凸包顶点组合选最优四边形（主路径，旋转不变、稳定）
-	initOrdered, found := func() ([4]image.Point, bool) {
-		if quad, ok := findBestQuadFromHull(hull, imgW, imgH, targetAspect); ok {
-			return CornerOrder(quad), true
-		}
-		return [4]image.Point{}, false
-	}()
+	imgDiagonal := math.Sqrt(float64(imgW*imgW + imgH*imgH))
+	epsilon := imgDiagonal * 0.015
+	initCorners := SimplifyContour(hull, epsilon)
 
-	// 方式 B（兜底）：DP 简化（原方法）
-	if !found {
-		imgDiagonal := math.Sqrt(float64(imgW*imgW + imgH*imgH))
-		epsilon := imgDiagonal * 0.015
-		initCorners := SimplifyContour(hull, epsilon)
-
-		for len(initCorners) > 4 && epsilon < imgDiagonal*0.2 {
-			epsilon += imgDiagonal * 0.01
-			initCorners = SimplifyContour(hull, epsilon)
-		}
-		for len(initCorners) < 4 && epsilon < imgDiagonal*0.3 {
-			epsilon += imgDiagonal * 0.01
-			initCorners = SimplifyContour(hull, epsilon)
-		}
-		if len(initCorners) < 4 {
-			return [4]image.Point{}, false
-		}
-
-		var temp [4]image.Point
-		for i := 0; i < 4 && i < len(initCorners); i++ {
-			temp[i] = initCorners[i]
-		}
-		initOrdered = CornerOrder(temp)
+	// 逐步增大 epsilon 直到得到 4 个角点
+	for len(initCorners) > 4 && epsilon < imgDiagonal*0.2 {
+		epsilon += imgDiagonal * 0.01
+		initCorners = SimplifyContour(hull, epsilon)
+	}
+	for len(initCorners) < 4 && epsilon < imgDiagonal*0.3 {
+		epsilon += imgDiagonal * 0.01
+		initCorners = SimplifyContour(hull, epsilon)
 	}
 
-	// 用直线拟合 + 求交来精化角点
-	refined := refineCornersByLineFitting(component, initOrdered, imgW, imgH)
-	return finalizeCorners(initOrdered, refined, imgW, imgH, targetAspect)
-}
+	if len(initCorners) < 4 {
+		return [4]image.Point{}, false
+	}
 
-// finalizeCorners 对精化结果做统一验证与排序（精化与兜底共用）
-// refined 为 nil 时直接使用初始角点
-func finalizeCorners(initOrdered [4]image.Point, refined *[4]image.Point, imgW, imgH int, targetAspect float64) ([4]image.Point, bool) {
+	// 取前 4 个并按角度排序
+	var temp [4]image.Point
+	for i := 0; i < 4 && i < len(initCorners); i++ {
+		temp[i] = initCorners[i]
+	}
+	initOrdered := CornerOrder(temp)
+
+	// 用直线拟合 + 求交来精化角点
+	refined := refineCornersByLineFitting(component, hull, initOrdered, imgW, imgH)
 	if refined == nil {
 		if corners, ok := validateCorners(initOrdered[:], imgW, imgH, targetAspect); ok {
 			return corners, true
@@ -492,6 +377,8 @@ func finalizeCorners(initOrdered [4]image.Point, refined *[4]image.Point, imgW, 
 
 	return [4]image.Point{}, false
 }
+
+
 
 // validateCorners 验证并排序四个角点
 func validateCorners(points []image.Point, imgW, imgH int, targetAspect float64) ([4]image.Point, bool) {
@@ -591,14 +478,10 @@ func distance(a, b image.Point) float64 {
 	return math.Sqrt(dx*dx + dy*dy)
 }
 
-// refineCornersByLineFitting 通过边界点分段 → 边中央段直线拟合 → 直线求交
-// 获得亚像素精度的四个角点。
-// 与旧版相比的两处关键改进：
-//  1. 只拟合每条边的中央段（投影参数 t ∈ [0.15, 0.85]），避开圆角弧段与相邻边的污染
-//  2. 使用迭代重加权最小二乘（Cauchy 权）抗离群点
-//
+// refineCornersByLineFitting 通过边界点集分段 → 直线拟合 → 直线求交
+// 获得亚像素精度的四个角点，比凸包简化更精确
 // imgW, imgH: 原始图像宽高，用于过滤图像硬边界附近的污染点
-func refineCornersByLineFitting(component []image.Point, initCorners [4]image.Point, imgW, imgH int) *[4]image.Point {
+func refineCornersByLineFitting(component []image.Point, hull []image.Point, initCorners [4]image.Point, imgW, imgH int) *[4]image.Point {
 	// 建立点集快速查表
 	pointSet := make(map[image.Point]bool, len(component))
 	for _, p := range component {
@@ -639,57 +522,38 @@ func refineCornersByLineFitting(component []image.Point, initCorners [4]image.Po
 	ordered := CornerOrder(initCorners)
 
 	// 将边界点分段拟合到 4 条边
-	// 对每个边界点，计算到 4 条边的最近距离与投影参数 t，归入最近边；
-	// 优先只保留 t ∈ [0.1, 0.9] 的中央段点（避开圆角弧段与相邻边污染）；
-	// 若某条边中央段点数不足，则退回使用该边的全部点（避免因单边残缺放弃整体精化）
-	edgePoints := make([][]image.Point, 4) // 中央段点
-	edgeAll := make([][]image.Point, 4)    // 该边全段点（兜底）
-	const centralLo, centralHi = 0.1, 0.9
-	// 距四边形边过远的点视为卡片内部内容（文字/照片）的边缘，不参与拟合
-	maxEdgeDist := float64(max(12, min(imgW, imgH)*4/100))
+	// 对每个边界点，计算到 4 条边的距离，归入最近边
+	edgePoints := make([][]image.Point, 4)
 
 	for p := range boundarySet {
 		bestEdge := 0
 		bestDist := math.MaxFloat64
-		bestT := 0.0
 		for i := 0; i < 4; i++ {
 			a := ordered[i]
 			b := ordered[(i+1)%4]
-			d, t := pointToSegmentParam(p, a, b)
+			d := pointToSegmentDistance(p, a, b)
 			if d < bestDist {
 				bestDist = d
-				bestT = t
 				bestEdge = i
 			}
 		}
-		if bestDist > maxEdgeDist {
-			continue
-		}
-		edgeAll[bestEdge] = append(edgeAll[bestEdge], p)
-		if bestT >= centralLo && bestT <= centralHi {
-			edgePoints[bestEdge] = append(edgePoints[bestEdge], p)
-		}
+		edgePoints[bestEdge] = append(edgePoints[bestEdge], p)
 	}
 
-	// 每条边至少需要 4 个点才能拟合；不足则用该边全段点，仍不足则放弃
-	const minPoints = 4
+	// 每条边至少需要 5 个点才能拟合
 	for i := 0; i < 4; i++ {
-		if len(edgePoints[i]) < minPoints {
-			if len(edgeAll[i]) >= minPoints {
-				edgePoints[i] = edgeAll[i]
-			} else {
-				return nil
-			}
+		if len(edgePoints[i]) < 5 {
+			return nil
 		}
 	}
 
-	// 对每条边做迭代重加权正交距离直线拟合（抗离群点）
+	// 对每条边做正交距离直线拟合
 	// 直线表示为: ax + by + c = 0, 其中 a^2 + b^2 = 1
 	type line struct{ a, b, c float64 }
 	var lines [4]line
 
 	for i := 0; i < 4; i++ {
-		a, b, c := fitLineOrthogonalIRLS(edgePoints[i])
+		a, b, c := fitLineOrthogonal(edgePoints[i])
 		lines[i] = line{a, b, c}
 	}
 
@@ -705,57 +569,53 @@ func refineCornersByLineFitting(component []image.Point, initCorners [4]image.Po
 	return &refined
 }
 
-// pointToSegmentParam 返回点 p 到线段 ab 的距离，以及投影参数 t（0=起点，1=终点）
-func pointToSegmentParam(p, a, b image.Point) (float64, float64) {
+// pointToSegmentDistance 计算点到线段的最短距离
+func pointToSegmentDistance(p, a, b image.Point) float64 {
 	dx := float64(b.X - a.X)
 	dy := float64(b.Y - a.Y)
 	lengthSq := dx*dx + dy*dy
 	if lengthSq == 0 {
-		return distance(p, a), 0
+		return distance(p, a)
 	}
 	t := (float64(p.X-a.X)*dx + float64(p.Y-a.Y)*dy) / lengthSq
 	t = math.Max(0, math.Min(1, t))
 	nearX := float64(a.X) + t*dx
 	nearY := float64(a.Y) + t*dy
-	return math.Sqrt((float64(p.X)-nearX)*(float64(p.X)-nearX) + (float64(p.Y)-nearY)*(float64(p.Y)-nearY)), t
+	return math.Sqrt((float64(p.X)-nearX)*(float64(p.X)-nearX) + (float64(p.Y)-nearY)*(float64(p.Y)-nearY))
 }
 
-// fitLineOrthogonalWeighted 对点集做加权正交距离直线拟合
+// fitLineOrthogonal 对点集做正交距离直线拟合
 // 返回直线 ax + by + c = 0 的系数 (a, b, c)，其中 a^2 + b^2 = 1
-// weights 与 points 等长，权重越大越重要
-func fitLineOrthogonalWeighted(points []image.Point, weights []float64) (float64, float64, float64) {
+func fitLineOrthogonal(points []image.Point) (float64, float64, float64) {
 	n := len(points)
 	if n < 2 {
 		return 1, 0, 0
 	}
 
-	// 计算加权质心
-	var wsum, cx, cy float64
-	for i := 0; i < n; i++ {
-		w := weights[i]
-		wsum += w
-		cx += w * float64(points[i].X)
-		cy += w * float64(points[i].Y)
+	// 计算质心
+	var cx, cy float64
+	for _, p := range points {
+		cx += float64(p.X)
+		cy += float64(p.Y)
 	}
-	if wsum <= 0 {
-		return 1, 0, 0
-	}
-	cx /= wsum
-	cy /= wsum
+	cx /= float64(n)
+	cy /= float64(n)
 
-	// 计算加权协方差矩阵 [xx xy; xy yy]
+	// 计算协方差矩阵 [xx xy; xy yy]
 	var xx, xy, yy float64
-	for i := 0; i < n; i++ {
-		w := weights[i]
-		dx := float64(points[i].X) - cx
-		dy := float64(points[i].Y) - cy
-		xx += w * dx * dx
-		xy += w * dx * dy
-		yy += w * dy * dy
+	for _, p := range points {
+		dx := float64(p.X) - cx
+		dy := float64(p.Y) - cy
+		xx += dx * dx
+		xy += dx * dy
+		yy += dy * dy
 	}
 
 	// 最小特征值对应的特征向量是直线的法向量
+	// 主特征向量沿直线方向，次特征向量垂直于直线（法向量）
+	// atan2(2*xy, xx-yy) 给出主特征向量方向，加 π/2 得法向量方向
 	theta := 0.5 * math.Atan2(2*xy, xx-yy)
+	// 主特征向量方向 + π/2 = 法向量方向
 	theta += math.Pi / 2
 	a := math.Cos(theta)
 	b := math.Sin(theta)
@@ -766,65 +626,10 @@ func fitLineOrthogonalWeighted(points []image.Point, weights []float64) (float64
 		b = -b
 	}
 
+	// c = -(a*cx + b*cy)
 	c := -(a*cx + b*cy)
-	return a, b, c
-}
-
-// fitLineOrthogonalIRLS 迭代重加权正交距离直线拟合（Cauchy 权），抗离群点
-// 每次迭代按残差降权：离直线越远的点权重越低，收敛后离群点几乎不影响结果
-func fitLineOrthogonalIRLS(points []image.Point) (float64, float64, float64) {
-	n := len(points)
-	if n < 2 {
-		return 1, 0, 0
-	}
-
-	weights := make([]float64, n)
-	for i := range weights {
-		weights[i] = 1
-	}
-
-	a, b, c := fitLineOrthogonalWeighted(points, weights)
-	for iter := 0; iter < 5; iter++ {
-		// 计算正交距离残差
-		residuals := make([]float64, n)
-		for i, p := range points {
-			residuals[i] = math.Abs(a*float64(p.X) + b*float64(p.Y) + c)
-		}
-		// 尺度取 3×中位残差（Cauchy 权），鲁棒
-		median := medianValue(residuals)
-		if median <= 0 {
-			break // 已完美共线
-		}
-		scale := 3 * median
-		for i := range weights {
-			r := residuals[i]
-			weights[i] = 1 / (1 + (r/scale)*(r/scale))
-		}
-
-		na, nb, nc := fitLineOrthogonalWeighted(points, weights)
-		if math.Abs(a-na)+math.Abs(b-nb)+math.Abs(c-nc) < 1e-9 {
-			a, b, c = na, nb, nc
-			break
-		}
-		a, b, c = na, nb, nc
-	}
 
 	return a, b, c
-}
-
-// medianValue 返回浮点数切片的中位数
-func medianValue(values []float64) float64 {
-	n := len(values)
-	if n == 0 {
-		return 0
-	}
-	sorted := make([]float64, n)
-	copy(sorted, values)
-	sort.Float64s(sorted)
-	if n%2 == 1 {
-		return sorted[n/2]
-	}
-	return (sorted[n/2-1] + sorted[n/2]) / 2
 }
 
 // lineIntersection 计算两条直线的交点
