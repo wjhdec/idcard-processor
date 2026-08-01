@@ -31,15 +31,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.25'
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -61,8 +61,54 @@ jobs:
           fi
         shell: bash
 
+      # 重命名产物为带平台标识的文件名，避免各平台产物同名相互覆盖：
+      # - Linux/Windows 直接重命名二进制
+      # - macOS 输出是 .app 应用包，压缩为 .app.zip 作为 Release 资产
+      - name: 重命名产物（含平台标识）
+        shell: bash
+        run: |
+          cd build/bin
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv idcard-processor.exe idcard-processor-${{ matrix.name }}.exe
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            app_dir="$(find . -maxdepth 1 -name '*.app' -print -quit)"
+            if [ -z "$app_dir" ]; then
+              echo "未找到 macOS .app 产物" >&2
+              exit 1
+            fi
+            ditto -c -k --sequesterRsrc --keepParent "$app_dir" "idcard-processor-${{ matrix.name }}.app.zip"
+            rm -rf "$app_dir"
+          else
+            mv idcard-processor idcard-processor-${{ matrix.name }}
+          fi
+
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: idcard-processor-${{ matrix.name }}
           path: build/bin/*
+          if-no-files-found: error
+
+  # 打 tag 时把三平台产物挂到 GitHub Release 下载区
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 创建/更新 Release 并上传产物
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release create "${TAG}" artifacts/* --generate-notes; then
+            gh release upload "${TAG}" artifacts/* --clobber
+          fi
+        shell: bash
