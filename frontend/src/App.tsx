@@ -5,6 +5,9 @@ import { OnFileDrop, OnFileDropOff } from '../wailsjs/runtime/runtime';
 
 interface Point { x: number; y: number; }
 
+// Wails 后端返回的图片信息（与 app.go 的 ImageInfo 结构对应）
+interface ImageInfo { width: number; height: number; base64: string; filePath: string; }
+
 type CornerName = 'tl' | 'tr' | 'br' | 'bl';
 
 function App() {
@@ -33,36 +36,41 @@ function App() {
     });
   }, []);
 
-  // 共享的图片加载逻辑
+  // 共享的图片渲染逻辑：设置预览 + 自动检测角点（选择文件与拖放共用）
+  const renderImage = useCallback((info: ImageInfo) => {
+    setFilePath(info.filePath);
+    const img = new Image();
+    img.onload = async () => {
+      setImgInfo({ w: info.width, h: info.height, src: img });
+      // 尝试自动检测角点，失败则用默认位置
+      try {
+        const detected = await DetectCorners(info.filePath);
+        setCorners({
+          tl: { x: detected[0].x, y: detected[0].y },
+          tr: { x: detected[1].x, y: detected[1].y },
+          br: { x: detected[2].x, y: detected[2].y },
+          bl: { x: detected[3].x, y: detected[3].y },
+        });
+        setStatus(`已加载: ${info.width}x${info.height}（自动检测角点）`);
+      } catch {
+        initCorners(info.width, info.height);
+        setStatus(`已加载: ${info.width}x${info.height}（使用默认角点）`);
+      }
+    };
+    img.src = info.base64;
+  }, [initCorners]);
+
+  // 按路径加载图片（拖放入口）
   const loadImageFromPath = useCallback(async (path: string) => {
     try {
       setStatus('加载中...');
       const info = await LoadImage(path);
       if (!info) { setStatus('加载失败'); return; }
-      setFilePath(info.filePath);
-      const img = new Image();
-      img.onload = async () => {
-        setImgInfo({ w: info.width, h: info.height, src: img });
-        // 尝试自动检测角点，失败则用默认位置
-        try {
-          const detected = await DetectCorners(path);
-          setCorners({
-            tl: { x: detected[0].x, y: detected[0].y },
-            tr: { x: detected[1].x, y: detected[1].y },
-            br: { x: detected[2].x, y: detected[2].y },
-            bl: { x: detected[3].x, y: detected[3].y },
-          });
-          setStatus(`已加载: ${info.width}x${info.height}（自动检测角点）`);
-        } catch {
-          initCorners(info.width, info.height);
-          setStatus(`已加载: ${info.width}x${info.height}（使用默认角点）`);
-        }
-      };
-      img.src = info.base64;
+      renderImage(info);
     } catch (e: any) {
       setStatus('错误: ' + e);
     }
-  }, [initCorners]);
+  }, [renderImage]);
 
   // 选择文件
   const handleSelectFile = async () => {
@@ -70,25 +78,7 @@ function App() {
       setStatus('选择文件中...');
       const info = await SelectInputFile();
       if (!info) { setStatus('已取消'); return; }
-      setFilePath(info.filePath);
-      const img = new Image();
-      img.onload = async () => {
-        setImgInfo({ w: info.width, h: info.height, src: img });
-        try {
-          const detected = await DetectCorners(info.filePath);
-          setCorners({
-            tl: { x: detected[0].x, y: detected[0].y },
-            tr: { x: detected[1].x, y: detected[1].y },
-            br: { x: detected[2].x, y: detected[2].y },
-            bl: { x: detected[3].x, y: detected[3].y },
-          });
-          setStatus(`已加载: ${info.width}x${info.height}（自动检测角点）`);
-        } catch {
-          initCorners(info.width, info.height);
-          setStatus(`已加载: ${info.width}x${info.height}（使用默认角点）`);
-        }
-      };
-      img.src = info.base64;
+      renderImage(info);
     } catch (e: any) {
       setStatus('错误: ' + e);
     }
@@ -204,16 +194,35 @@ function App() {
     }
   };
 
+  // 拖动节流：requestAnimationFrame 合并高频 mousemove，避免拖动时每帧全量重绘
+  const dragPosRef = useRef<Point | null>(null);
+  const dragRafRef = useRef<number | null>(null);
+
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragging || !imgInfo) return;
-    const pos = getCanvasPos(e);
-    setCorners(prev => ({
-      ...prev,
-      [dragging]: { x: Math.max(0, Math.min(imgInfo.w - 1, pos.x)), y: Math.max(0, Math.min(imgInfo.h - 1, pos.y)) },
-    }));
+    dragPosRef.current = getCanvasPos(e);
+    if (dragRafRef.current !== null) return;
+    dragRafRef.current = requestAnimationFrame(() => {
+      dragRafRef.current = null;
+      const pos = dragPosRef.current;
+      if (!pos || !imgInfo) return;
+      setCorners(prev => ({
+        ...prev,
+        [dragging]: {
+          x: Math.max(0, Math.min(imgInfo.w - 1, pos.x)),
+          y: Math.max(0, Math.min(imgInfo.h - 1, pos.y)),
+        },
+      }));
+    });
   };
 
-  const handleMouseUp = () => setDragging(null);
+  const handleMouseUp = () => {
+    setDragging(null);
+    if (dragRafRef.current !== null) {
+      cancelAnimationFrame(dragRafRef.current);
+      dragRafRef.current = null;
+    }
+  };
 
   // 拖放事件处理：使用 Wails 内置 OnFileDrop 获取文件真实路径
   // （File.path 是 Electron/WebKitGTK 特有属性，Windows WebView2 中不存在）

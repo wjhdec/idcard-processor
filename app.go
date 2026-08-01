@@ -6,12 +6,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"image/png"
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"idcard-processor/internal/detect"
@@ -121,7 +121,7 @@ func (a *App) ProcessImage(filePath string, corners [4]Point, dpi int, outputPat
 		{X: corners[2].X, Y: corners[2].Y},
 		{X: corners[3].X, Y: corners[3].Y},
 	}
-	srcCorners := sortCorners(pts)
+	srcCorners := detect.CornerOrder(pts)
 
 	// 计算目标尺寸
 	cardW := int(idcard.CardWidthMM / 25.4 * float64(dpi))
@@ -140,31 +140,6 @@ func (a *App) ProcessImage(filePath string, corners [4]Point, dpi int, outputPat
 	}
 
 	return nil
-}
-
-// sortCorners 将四个点按逆时针排序：左上、右上、右下、左下
-func sortCorners(corners [4]image.Point) [4]image.Point {
-	// 计算质心
-	var cx, cy float64
-	for _, p := range corners {
-		cx += float64(p.X)
-		cy += float64(p.Y)
-	}
-	cx /= 4
-	cy /= 4
-
-	// 按角度排序
-	type ap struct {
-		p     image.Point
-		angle float64
-	}
-	aps := make([]ap, 4)
-	for i, p := range corners {
-		aps[i] = ap{p, math.Atan2(float64(p.Y)-cy, float64(p.X)-cx)}
-	}
-	sort.Slice(aps, func(i, j int) bool { return aps[i].angle < aps[j].angle })
-
-	return [4]image.Point{aps[0].p, aps[1].p, aps[2].p, aps[3].p}
 }
 
 // SelectOutputFile 打开保存文件对话框
@@ -222,11 +197,84 @@ func saveImage(path string, img image.Image) error {
 	}
 }
 
-// imageToBase64 将图片编码为 base64 JPEG
+// imageToBase64 将图片编码为 base64 JPEG 预览（最长边先降采样到 1600px，降低内存与编码耗时）
 func imageToBase64(img image.Image) (string, error) {
+	preview := downscaleForPreview(img, 1600)
 	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85}); err != nil {
+	if err := jpeg.Encode(&buf, preview, &jpeg.Options{Quality: 85}); err != nil {
 		return "", err
 	}
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+// downscaleForPreview 将图像最长边缩放到 maxDim 以内（双线性插值），保持宽高比
+// 尺寸未超限时原样返回，不做额外拷贝
+func downscaleForPreview(img image.Image, maxDim int) image.Image {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= maxDim && h <= maxDim {
+		return img
+	}
+
+	scale := float64(maxDim) / float64(max(w, h))
+	dstW := int(math.Round(float64(w) * scale))
+	dstH := int(math.Round(float64(h) * scale))
+	if dstW < 1 {
+		dstW = 1
+	}
+	if dstH < 1 {
+		dstH = 1
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	// 双线性采样（映射到源图中心对齐坐标）
+	for dy := 0; dy < dstH; dy++ {
+		sy := (float64(dy)+0.5)*float64(h)/float64(dstH) - 0.5
+		if sy < 0 {
+			sy = 0
+		}
+		iy := int(sy)
+		fy := sy - float64(iy)
+		if iy >= h-1 {
+			iy = h - 2
+		}
+		for dx := 0; dx < dstW; dx++ {
+			sx := (float64(dx)+0.5)*float64(w)/float64(dstW) - 0.5
+			if sx < 0 {
+				sx = 0
+			}
+			ix := int(sx)
+			fx := sx - float64(ix)
+			if ix >= w-1 {
+				ix = w - 2
+			}
+
+			c00 := toRGBA(img.At(b.Min.X+ix, b.Min.Y+iy))
+			c10 := toRGBA(img.At(b.Min.X+ix+1, b.Min.Y+iy))
+			c01 := toRGBA(img.At(b.Min.X+ix, b.Min.Y+iy+1))
+			c11 := toRGBA(img.At(b.Min.X+ix+1, b.Min.Y+iy+1))
+
+			w00 := (1 - fx) * (1 - fy)
+			w10 := fx * (1 - fy)
+			w01 := (1 - fx) * fy
+			w11 := fx * fy
+
+			dst.SetRGBA(dx, dy, color.RGBA{
+				R: uint8(math.Round(float64(c00.R)*w00 + float64(c10.R)*w10 + float64(c01.R)*w01 + float64(c11.R)*w11)),
+				G: uint8(math.Round(float64(c00.G)*w00 + float64(c10.G)*w10 + float64(c01.G)*w01 + float64(c11.G)*w11)),
+				B: uint8(math.Round(float64(c00.B)*w00 + float64(c10.B)*w10 + float64(c01.B)*w01 + float64(c11.B)*w11)),
+				A: uint8(math.Round(float64(c00.A)*w00 + float64(c10.A)*w10 + float64(c01.A)*w01 + float64(c11.A)*w11)),
+			})
+		}
+	}
+	return dst
+}
+
+// toRGBA 将任意 color.Color 归一化为 color.RGBA（非 8bit 通道会损失精度，预览可接受）
+func toRGBA(c color.Color) color.RGBA {
+	if r, ok := c.(color.RGBA); ok {
+		return r
+	}
+	r, g, b, a := c.RGBA()
+	return color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
 }

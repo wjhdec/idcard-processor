@@ -4,7 +4,6 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"math"
 )
 
 // CreateRoundedCornerMask 创建圆角遮罩，圆角半径为 r，内部为白色（不透明），外部为黑色（透明）
@@ -71,19 +70,4 @@ func ApplyMask(img *image.RGBA, mask *image.Alpha, bgColor color.Color) *image.R
 func DrawRoundedCorners(img *image.RGBA, radius int) *image.RGBA {
 	mask := CreateRoundedCornerMask(img.Bounds().Dx(), img.Bounds().Dy(), radius)
 	return ApplyMask(img, mask, color.White)
-}
-
-// ArcInBounds 判断点 (x, y) 是否在圆心为 (cx, cy)、半径为 r 的圆弧内
-func pointInCircle(x, y, cx, cy, r int) bool {
-	dx := float64(x - cx)
-	dy := float64(y - cy)
-	return math.Sqrt(dx*dx+dy*dy) <= float64(r)
-}
-
-// min 返回两个整数中较小的
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

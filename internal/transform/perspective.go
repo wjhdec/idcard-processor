@@ -2,13 +2,14 @@ package transform
 
 import (
 	"image"
-	"image/color"
+	"image/draw"
 	"log"
 	"math"
 )
 
-// solveLinear 使用高斯消元法（全选主元）求解 8x8 线性方程组
-func solveLinear(A [][]float64, b []float64) ([]float64, error) {
+// solveLinear 使用高斯消元法（全选主元）求解线性方程组，返回解的切片
+// 处理 6x6（仿射）与 8x8（透视）两种情况；矩阵奇异时对应系数取 0
+func solveLinear(A [][]float64, b []float64) []float64 {
 	n := len(A)
 	colIdx := make([]int, n)
 	for i := range colIdx {
@@ -81,7 +82,7 @@ func solveLinear(A [][]float64, b []float64) ([]float64, error) {
 		result[colIdx[i]] = x[i]
 	}
 
-	return result, nil
+	return result
 }
 
 // computePerspectiveCoeffs 计算透视变换系数（第一参数 → 第二参数）
@@ -91,7 +92,7 @@ func solveLinear(A [][]float64, b []float64) ([]float64, error) {
 //	v = (d*x + e*y + f) / (g*x + h*y + 1)
 //
 // 返回系数 [a, b, c, d, e, f, g, h]
-func computePerspectiveCoeffs(from, to [4]image.Point) ([]float64, error) {
+func computePerspectiveCoeffs(from, to [4]image.Point) []float64 {
 	A := make([][]float64, 8)
 	for i := range A {
 		A[i] = make([]float64, 8)
@@ -109,18 +110,12 @@ func computePerspectiveCoeffs(from, to [4]image.Point) ([]float64, error) {
 		A[i*2][0] = x
 		A[i*2][1] = y
 		A[i*2][2] = 1
-		A[i*2][3] = 0
-		A[i*2][4] = 0
-		A[i*2][5] = 0
 		A[i*2][6] = -u * x
 		A[i*2][7] = -u * y
 		b[i*2] = u
 
 		// v = (d*x + e*y + f) / (g*x + h*y + 1)
 		// => d*x + e*y + f - v*g*x - v*h*y = v
-		A[i*2+1][0] = 0
-		A[i*2+1][1] = 0
-		A[i*2+1][2] = 0
 		A[i*2+1][3] = x
 		A[i*2+1][4] = y
 		A[i*2+1][5] = 1
@@ -132,70 +127,25 @@ func computePerspectiveCoeffs(from, to [4]image.Point) ([]float64, error) {
 	return solveLinear(A, b)
 }
 
-// bilinearInterpolate 在源图像中进行双线性插值
-func bilinearInterpolate(src *image.RGBA, x, y float64) color.Color {
-	bounds := src.Bounds()
-	w := bounds.Dx()
-	h := bounds.Dy()
-
-	if x < 0 || x >= float64(w) || y < 0 || y >= float64(h) {
-		return color.White
+// normalizedRGBA 将任意图像转换为原点在 (0,0) 的 *image.RGBA
+// （*image.RGBA 且原点已是 (0,0) 时直接复用，避免拷贝）
+func normalizedRGBA(src image.Image) *image.RGBA {
+	if r, ok := src.(*image.RGBA); ok && r.Rect.Min == (image.Point{}) {
+		return r
 	}
-
-	ix := int(math.Floor(x))
-	iy := int(math.Floor(y))
-	fx := x - float64(ix)
-	fy := y - float64(iy)
-
-	if ix < 0 {
-		ix = 0
-	}
-	if iy < 0 {
-		iy = 0
-	}
-	if ix >= w-1 {
-		ix = w - 2
-	}
-	if iy >= h-1 {
-		iy = h - 2
-	}
-
-	c00 := src.RGBAAt(ix, iy)
-	c10 := src.RGBAAt(ix+1, iy)
-	c01 := src.RGBAAt(ix, iy+1)
-	c11 := src.RGBAAt(ix+1, iy+1)
-
-	r := float64(c00.R)*(1-fx)*(1-fy) + float64(c10.R)*fx*(1-fy) +
-		float64(c01.R)*(1-fx)*fy + float64(c11.R)*fx*fy
-	g := float64(c00.G)*(1-fx)*(1-fy) + float64(c10.G)*fx*(1-fy) +
-		float64(c01.G)*(1-fx)*fy + float64(c11.G)*fx*fy
-	bl := float64(c00.B)*(1-fx)*(1-fy) + float64(c10.B)*fx*(1-fy) +
-		float64(c01.B)*(1-fx)*fy + float64(c11.B)*fx*fy
-	a := float64(c00.A)*(1-fx)*(1-fy) + float64(c10.A)*fx*(1-fy) +
-		float64(c01.A)*(1-fx)*fy + float64(c11.A)*fx*fy
-
-	return color.RGBA{
-		R: uint8(math.Round(r)),
-		G: uint8(math.Round(g)),
-		B: uint8(math.Round(bl)),
-		A: uint8(math.Round(a)),
-	}
+	b := src.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
+	return dst
 }
 
 // PerspectiveWarp 对图像进行透视变换
 // srcCorners: 源图像中身份证的四个角（左上、右上、右下、左下）
 // 变换过程：将源图像中 srcCorners 围成的四边形映射到目标矩形
+// 内层循环直接读写 Pix 数组（避免 Set/RGBAAt 的接口分发与边界检查），
+// 双线性插值采样
 func PerspectiveWarp(src image.Image, srcCorners [4]image.Point, dstW, dstH int) *image.RGBA {
-	srcRGBA, ok := src.(*image.RGBA)
-	if !ok {
-		bounds := src.Bounds()
-		srcRGBA = image.NewRGBA(bounds)
-		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			for x := bounds.Min.X; x < bounds.Max.X; x++ {
-				srcRGBA.Set(x, y, src.At(x, y))
-			}
-		}
-	}
+	srcRGBA := normalizedRGBA(src)
 
 	// 目标矩形角点（输出图像的四角）
 	dstCorners := [4]image.Point{
@@ -208,39 +158,77 @@ func PerspectiveWarp(src image.Image, srcCorners [4]image.Point, dstW, dstH int)
 	// 计算逆变换系数：对于目标像素 (dx,dy)，找到源图像中的 (sx,sy)
 	// computePerspectiveCoeffs(from, to) = from → to 的映射
 	// 我们需要 dst → src，所以 from=dstCorners, to=srcCorners
-	coeffs, err := computePerspectiveCoeffs(dstCorners, srcCorners)
-	if err != nil {
-		log.Printf("透视变换系数求解失败，回退仿射变换: %v", err)
-		return affineWarp(srcRGBA, srcCorners, dstW, dstH)
-	}
+	coeffs := computePerspectiveCoeffs(dstCorners, srcCorners)
 
 	a, b, c := coeffs[0], coeffs[1], coeffs[2]
 	d, e, f := coeffs[3], coeffs[4], coeffs[5]
 	g, h := coeffs[6], coeffs[7]
 
+	result := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	// 快速路径：源与目标都是原点在 (0,0) 的 RGBA，直接访问 Pix
+	applyWarp(result, srcRGBA, func(x, y float64) (float64, float64) {
+		denom := g*x + h*y + 1
+		return (a*x + b*y + c) / denom, (d*x + e*y + f) / denom
+	})
+
 	log.Printf("透视系数: a=%.6f b=%.6f c=%.6f d=%.6f e=%.6f f=%.6f g=%.6f h=%.6f",
 		a, b, c, d, e, f, g, h)
-
-	result := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
-
-	for dy := 0; dy < dstH; dy++ {
-		for dx := 0; dx < dstW; dx++ {
-			x := float64(dx)
-			y := float64(dy)
-			denom := g*x + h*y + 1
-			if math.Abs(denom) < 1e-12 {
-				continue
-			}
-			sx := (a*x + b*y + c) / denom
-			sy := (d*x + e*y + f) / denom
-			result.Set(dx, dy, bilinearInterpolate(srcRGBA, sx, sy))
-		}
-	}
 
 	return result
 }
 
-// affineWarp 仿射变换回退方案
+// applyWarp 遍历目标图像每个像素，通过 mapFunc 求源坐标并双线性采样
+func applyWarp(dst, src *image.RGBA, mapFunc func(x, y float64) (float64, float64)) {
+	dstW, dstH := dst.Rect.Dx(), dst.Rect.Dy()
+	srcW, srcH := src.Rect.Dx(), src.Rect.Dy()
+	srcPix, srcStride := src.Pix, src.Stride
+	dstPix, dstStride := dst.Pix, dst.Stride
+
+	for dy := 0; dy < dstH; dy++ {
+		y := float64(dy)
+		for dx := 0; dx < dstW; dx++ {
+			out := dy*dstStride + dx*4
+			sx, sy := mapFunc(float64(dx), y)
+
+			if sx < 0 || sx >= float64(srcW) || sy < 0 || sy >= float64(srcH) {
+				dstPix[out], dstPix[out+1], dstPix[out+2], dstPix[out+3] = 255, 255, 255, 255
+				continue
+			}
+
+			ix := int(math.Floor(sx))
+			iy := int(math.Floor(sy))
+			fx := sx - float64(ix)
+			fy := sy - float64(iy)
+
+			// 双线性插值（四像素权重）
+			w00 := (1 - fx) * (1 - fy)
+			w10 := fx * (1 - fy)
+			w01 := (1 - fx) * fy
+			w11 := fx * fy
+
+			// 四个采样点均在界内；越界方向的邻居退化用自身像素补齐
+			// （该方向插值权重为 0，读自身像素结果等价）
+			i00 := iy*srcStride + ix*4
+			i10 := i00 + 4
+			i01 := i00 + srcStride
+			i11 := i00 + srcStride + 4
+			if ix+1 >= srcW {
+				i10, i11 = i00, i00
+			}
+			if iy+1 >= srcH {
+				i01, i11 = i00, i00
+			}
+
+			dstPix[out] = uint8(math.Round(float64(srcPix[i00])*w00 + float64(srcPix[i10])*w10 + float64(srcPix[i01])*w01 + float64(srcPix[i11])*w11))
+			dstPix[out+1] = uint8(math.Round(float64(srcPix[i00+1])*w00 + float64(srcPix[i10+1])*w10 + float64(srcPix[i01+1])*w01 + float64(srcPix[i11+1])*w11))
+			dstPix[out+2] = uint8(math.Round(float64(srcPix[i00+2])*w00 + float64(srcPix[i10+2])*w10 + float64(srcPix[i01+2])*w01 + float64(srcPix[i11+2])*w11))
+			dstPix[out+3] = uint8(math.Round(float64(srcPix[i00+3])*w00 + float64(srcPix[i10+3])*w10 + float64(srcPix[i01+3])*w01 + float64(srcPix[i11+3])*w11))
+		}
+	}
+}
+
+// affineWarp 仿射变换回退方案（透视系数求解失败时使用）
+// 复用 solveLinear 求解 6x6 方程组
 func affineWarp(src *image.RGBA, srcCorners [4]image.Point, dstW, dstH int) *image.RGBA {
 	srcPts := []image.Point{srcCorners[0], srcCorners[1], srcCorners[3]}
 	dstPts := []image.Point{
@@ -249,12 +237,11 @@ func affineWarp(src *image.RGBA, srcCorners [4]image.Point, dstW, dstH int) *ima
 		{0, dstH - 1},
 	}
 
-	n := 6
-	A := make([][]float64, n)
-	b := make([]float64, n)
+	A := make([][]float64, 6)
 	for i := range A {
-		A[i] = make([]float64, n)
+		A[i] = make([]float64, 6)
 	}
+	b := make([]float64, 6)
 
 	for i := 0; i < 3; i++ {
 		dx := float64(dstPts[i].X)
@@ -262,64 +249,20 @@ func affineWarp(src *image.RGBA, srcCorners [4]image.Point, dstW, dstH int) *ima
 		sx := float64(srcPts[i].X)
 		sy := float64(srcPts[i].Y)
 
-		A[i*2][0] = dx
-		A[i*2][1] = dy
-		A[i*2][2] = 1
-		A[i*2][3] = 0
-		A[i*2][4] = 0
-		A[i*2][5] = 0
+		A[i*2][0], A[i*2][1], A[i*2][2] = dx, dy, 1
 		b[i*2] = sx
 
-		A[i*2+1][0] = 0
-		A[i*2+1][1] = 0
-		A[i*2+1][2] = 0
-		A[i*2+1][3] = dx
-		A[i*2+1][4] = dy
-		A[i*2+1][5] = 1
+		A[i*2+1][3], A[i*2+1][4], A[i*2+1][5] = dx, dy, 1
 		b[i*2+1] = sy
 	}
 
-	x := make([]float64, n)
-	// 高斯消元（6x6）
-	for col := 0; col < n; col++ {
-		pivot := col
-		for row := col + 1; row < n; row++ {
-			if math.Abs(A[row][col]) > math.Abs(A[pivot][col]) {
-				pivot = row
-			}
-		}
-		A[col], A[pivot] = A[pivot], A[col]
-		b[col], b[pivot] = b[pivot], b[col]
-		pivotVal := A[col][col]
-		if math.Abs(pivotVal) < 1e-12 {
-			continue
-		}
-		for row := col + 1; row < n; row++ {
-			factor := A[row][col] / pivotVal
-			for k := col; k < n; k++ {
-				A[row][k] -= factor * A[col][k]
-			}
-			b[row] -= factor * b[col]
-		}
-	}
-	for i := n - 1; i >= 0; i-- {
-		if math.Abs(A[i][i]) < 1e-12 {
-			continue
-		}
-		sum := b[i]
-		for j := i + 1; j < n; j++ {
-			sum -= A[i][j] * x[j]
-		}
-		x[i] = sum / A[i][i]
-	}
+	coeff := solveLinear(A, b)
 
+	srcRGBA := normalizedRGBA(src)
 	result := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
-	for dy := 0; dy < dstH; dy++ {
-		for dx := 0; dx < dstW; dx++ {
-			sx := x[0]*float64(dx) + x[1]*float64(dy) + x[2]
-			sy := x[3]*float64(dx) + x[4]*float64(dy) + x[5]
-			result.Set(dx, dy, bilinearInterpolate(src, sx, sy))
-		}
-	}
+	applyWarp(result, srcRGBA, func(x, y float64) (float64, float64) {
+		return coeff[0]*x + coeff[1]*y + coeff[2], coeff[3]*x + coeff[4]*y + coeff[5]
+	})
+
 	return result
 }

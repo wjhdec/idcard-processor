@@ -412,12 +412,11 @@ func findCornersFromComponent(component []image.Point, imgW, imgH int, targetAsp
 	}
 
 	// 方式 A：穷举凸包顶点组合选最优四边形（主路径，旋转不变、稳定）
-	initOrdered, found := func() ([4]image.Point, bool) {
-		if quad, ok := findBestQuadFromHull(hull, imgW, imgH, targetAspect); ok {
-			return CornerOrder(quad), true
-		}
-		return [4]image.Point{}, false
-	}()
+	initOrdered, found := [4]image.Point{}, false
+	if quad, ok := findBestQuadFromHull(hull, imgW, imgH, targetAspect); ok {
+		initOrdered = CornerOrder(quad)
+		found = true
+	}
 
 	// 方式 B（兜底）：DP 简化（原方法）
 	if !found {
@@ -839,11 +838,4 @@ func lineIntersection(a1, b1, c1, a2, b2, c2 float64) (float64, float64) {
 	x := (b1*c2 - b2*c1) / denom
 	y := (c1*a2 - c2*a1) / denom
 	return x, y
-}
-
-// DetectedCorners 表示检测到的角点结果
-type DetectedCorners struct {
-	Corners [4]image.Point
-	Score   float64
-	Method  string
 }
