@@ -10,18 +10,22 @@ export function GetDefaultDPI() {
   return window['go']['main']['App']['GetDefaultDPI']();
 }
 
+export function GetDocTypes() {
+  return window['go']['main']['App']['GetDocTypes']();
+}
+
 export function LoadImage(arg1) {
   return window['go']['main']['App']['LoadImage'](arg1);
 }
 
-export function ProcessImage(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['ProcessImage'](arg1, arg2, arg3, arg4);
+export function ProcessImage(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['ProcessImage'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
 export function SelectInputFile() {
   return window['go']['main']['App']['SelectInputFile']();
 }
 
-export function SelectOutputFile(arg1) {
-  return window['go']['main']['App']['SelectOutputFile'](arg1);
+export function SelectOutputFile(arg1, arg2) {
+  return window['go']['main']['App']['SelectOutputFile'](arg1, arg2);
 }

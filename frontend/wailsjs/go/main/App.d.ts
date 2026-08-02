@@ -6,10 +6,12 @@ export function DetectCorners(arg1:string):Promise<any>;
 
 export function GetDefaultDPI():Promise<number>;
 
+export function GetDocTypes():Promise<Array<main.DocType>>;
+
 export function LoadImage(arg1:string):Promise<main.ImageInfo>;
 
-export function ProcessImage(arg1:string,arg2:any,arg3:number,arg4:string):Promise<void>;
+export function ProcessImage(arg1:string,arg2:any,arg3:number,arg4:string,arg5:string,arg6:number,arg7:number):Promise<void>;
 
 export function SelectInputFile():Promise<main.ImageInfo>;
 
-export function SelectOutputFile(arg1:string):Promise<string>;
+export function SelectOutputFile(arg1:string,arg2:string):Promise<string>;

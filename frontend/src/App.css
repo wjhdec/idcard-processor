@@ -104,6 +104,17 @@ html, body, #root {
   font-size: 14px;
   text-align: center;
 }
+.dpi-input:disabled { opacity: 0.5; }
+
+.doc-select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+}
 
 .status {
   flex: 1;

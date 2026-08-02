@@ -3,13 +3,16 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import './App.css';
-import { SelectInputFile, ProcessImage, SelectOutputFile, GetDefaultDPI, LoadImage, DetectCorners } from '../wailsjs/go/main/App';
+import { SelectInputFile, ProcessImage, SelectOutputFile, GetDefaultDPI, LoadImage, DetectCorners, GetDocTypes } from '../wailsjs/go/main/App';
 import { OnFileDrop, OnFileDropOff } from '../wailsjs/runtime/runtime';
 
 interface Point { x: number; y: number; }
 
 // Wails 后端返回的图片信息（与 app.go 的 ImageInfo 结构对应）
 interface ImageInfo { width: number; height: number; base64: string; filePath: string; }
+
+// 证件类型（与 app.go 的 DocType 结构对应）
+interface DocType { key: string; name: string; }
 
 type CornerName = 'tl' | 'tr' | 'br' | 'bl';
 
@@ -20,13 +23,19 @@ function App() {
     tl: { x: 0, y: 0 }, tr: { x: 0, y: 0 }, br: { x: 0, y: 0 }, bl: { x: 0, y: 0 },
   });
   const [dpi, setDpi] = useState(350);
+  const [docTypes, setDocTypes] = useState<DocType[]>([]);
+  const [docType, setDocType] = useState('idcard');
+  const [customW, setCustomW] = useState(25);
+  const [customH, setCustomH] = useState(35);
+  const [format, setFormat] = useState('png');
   const [status, setStatus] = useState('点击"选择图片"开始');
   const [filePath, setFilePath] = useState('');
   const [dragging, setDragging] = useState<CornerName | null>(null);
   const [displaySize, setDisplaySize] = useState({ w: 800, h: 600 });
 
-  // 加载默认 DPI
+  // 加载默认 DPI 与证件类型列表
   useEffect(() => { GetDefaultDPI().then(setDpi); }, []);
+  useEffect(() => { GetDocTypes().then(setDocTypes); }, []);
 
   // 图片加载后计算初始角点（10% 内缩作为起点）
   const initCorners = useCallback((imgW: number, imgH: number) => {
@@ -260,12 +269,12 @@ function App() {
     if (!filePath) { setStatus('请先选择图片'); return; }
     try {
       const base = filePath.replace(/\.[^.]+$/, '');
-      const outPath = await SelectOutputFile(base + '_processed.jpg');
+      const outPath = await SelectOutputFile(base + '_processed.' + format, format);
       if (!outPath) { setStatus('已取消保存'); return; }
 
       setStatus('处理中...');
       const orderedCorners: [Point, Point, Point, Point] = [corners.tl, corners.tr, corners.br, corners.bl];
-      await ProcessImage(filePath, orderedCorners, dpi, outPath);
+      await ProcessImage(filePath, orderedCorners, dpi, outPath, docType, customW, customH);
       setStatus('处理完成: ' + outPath);
     } catch (e: any) {
       setStatus('处理失败: ' + e);
@@ -277,11 +286,44 @@ function App() {
       {dragOver && <div className="drop-overlay"><div>释放以加载图片</div></div>}
       <div className="toolbar">
         <button onClick={handleSelectFile} className="btn">📂 选择图片</button>
+        <select
+          className="doc-select"
+          value={docType}
+          onChange={e => setDocType(e.target.value)}
+          title="输出画幅类型"
+        >
+          {docTypes.map(t => (
+            <option key={t.key} value={t.key}>{t.name}</option>
+          ))}
+        </select>
+        {docType === 'custom' && (
+          <>
+            <label className="dpi-label">
+              宽(mm):
+              <input type="number" value={customW} onChange={e => setCustomW(Number(e.target.value))}
+                min={1} max={1000} className="dpi-input" title="自定义画幅宽度（毫米）" />
+            </label>
+            <label className="dpi-label">
+              高(mm):
+              <input type="number" value={customH} onChange={e => setCustomH(Number(e.target.value))}
+                min={1} max={1000} className="dpi-input" title="自定义画幅高度（毫米）" />
+            </label>
+          </>
+        )}
         <label className="dpi-label">
           DPI:
           <input type="number" value={dpi} onChange={e => setDpi(Number(e.target.value))}
             min={72} max={1200} className="dpi-input" />
         </label>
+        <select
+          className="doc-select"
+          value={format}
+          onChange={e => setFormat(e.target.value)}
+          title="输出格式：PNG 四角透明，JPEG 四角白色"
+        >
+          <option value="jpg">JPEG</option>
+          <option value="png">PNG</option>
+        </select>
         <button onClick={handleProcess} className="btn btn-primary" disabled={!filePath}>
           ✂️ 处理导出
         </button>

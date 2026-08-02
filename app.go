@@ -40,6 +40,12 @@ type ImageInfo struct {
 	FilePath string `json:"filePath"`
 }
 
+// DocType 证件类型摘要（供前端下拉列表展示）
+type DocType struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
 func NewApp() *App {
 	return &App{}
 }
@@ -110,8 +116,10 @@ func (a *App) DetectCorners(filePath string) ([4]Point, error) {
 }
 
 // ProcessImage 用用户选择的四个角点处理图片
-// 接收角点后自动按位置排序为：左上、右上、右下、左下
-func (a *App) ProcessImage(filePath string, corners [4]Point, dpi int, outputPath string) error {
+// docType: 证件类型 key（见 idcard.DocConfigs）
+// customW/customH: 自定义模式的画幅宽高（毫米），仅 docType="custom" 时生效
+// 输出格式由 outputPath 扩展名决定：PNG 四角透明，JPEG 四角白色
+func (a *App) ProcessImage(filePath string, corners [4]Point, dpi int, outputPath, docType string, customW, customH float64) error {
 	src, err := decodeImage(filePath)
 	if err != nil {
 		return fmt.Errorf("读取图片失败: %w", err)
@@ -126,16 +134,36 @@ func (a *App) ProcessImage(filePath string, corners [4]Point, dpi int, outputPat
 	}
 	srcCorners := detect.CornerOrder(pts)
 
-	// 计算目标尺寸
-	cardW := int(idcard.CardWidthMM / 25.4 * float64(dpi))
-	cardH := int(idcard.CardHeightMM / 25.4 * float64(dpi))
+	// 查询证件配置，未知 key 回退到身份证
+	cfg, ok := idcard.GetDocConfig(docType)
+	if !ok {
+		cfg = idcard.DocConfigs[0]
+	}
+
+	// 计算目标尺寸（毫米 → DPI 换算）
+	var cardW, cardH int
+	if cfg.CustomSize {
+		if customW <= 0 || customH <= 0 {
+			return fmt.Errorf("请填写有效的自定义宽度和高度")
+		}
+		cardW = int(customW / 25.4 * float64(dpi))
+		cardH = int(customH / 25.4 * float64(dpi))
+	} else {
+		cardW = int(cfg.WidthMM / 25.4 * float64(dpi))
+		cardH = int(cfg.HeightMM / 25.4 * float64(dpi))
+	}
 
 	// 透视变换
 	warped := transform.PerspectiveWarp(src, srcCorners, cardW, cardH)
 
-	// 圆角遮罩
-	radius := int(idcard.CornerRadiusMM / 25.4 * float64(dpi))
-	result := idcard.DrawRoundedCorners(warped, radius)
+	// 圆角遮罩：PNG 四角透明（保留 alpha），JPEG 四角白色（无透明通道）
+	radius := int(cfg.CornerRadiusMM / 25.4 * float64(dpi))
+	var result *image.RGBA
+	if isPNGOutput(outputPath) {
+		result = idcard.DrawRoundedCornersBG(warped, radius, color.Transparent)
+	} else {
+		result = idcard.DrawRoundedCorners(warped, radius)
+	}
 
 	// 保存
 	if err := saveImage(outputPath, result); err != nil {
@@ -146,15 +174,27 @@ func (a *App) ProcessImage(filePath string, corners [4]Point, dpi int, outputPat
 }
 
 // SelectOutputFile 打开保存文件对话框
-func (a *App) SelectOutputFile(defaultName string) (string, error) {
+// format: 输出格式（"png"/"jpg"），决定默认过滤器与提示文件名扩展
+func (a *App) SelectOutputFile(defaultName string, format string) (string, error) {
+	filters := []runtime.FileFilter{{DisplayName: "JPEG (*.jpg)", Pattern: "*.jpg"}}
+	if strings.EqualFold(format, "png") {
+		filters = []runtime.FileFilter{{DisplayName: "PNG (*.png)", Pattern: "*.png"}}
+	}
 	return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:           "保存处理结果",
 		DefaultFilename: defaultName,
-		Filters: []runtime.FileFilter{
-			{DisplayName: "JPEG (*.jpg)", Pattern: "*.jpg"},
-			{DisplayName: "PNG (*.png)", Pattern: "*.png"},
-		},
+		Filters:         filters,
 	})
+}
+
+// GetDocTypes 返回支持的证件类型列表
+func (a *App) GetDocTypes() []DocType {
+	cfgs := idcard.DocConfigs
+	types := make([]DocType, 0, len(cfgs))
+	for _, c := range cfgs {
+		types = append(types, DocType{Key: c.Key, Name: c.Name})
+	}
+	return types
 }
 
 // GetDefaultDPI 返回默认 DPI
@@ -179,6 +219,11 @@ func decodeImage(path string) (image.Image, error) {
 	default:
 		return nil, fmt.Errorf("不支持的图片格式: %s", ext)
 	}
+}
+
+// isPNGOutput 判断输出路径是否为 PNG 格式
+func isPNGOutput(path string) bool {
+	return strings.ToLower(filepath.Ext(path)) == ".png"
 }
 
 // saveImage 保存图像文件

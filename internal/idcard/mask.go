@@ -68,9 +68,14 @@ func ApplyMask(img *image.RGBA, mask *image.Alpha, bgColor color.Color) *image.R
 	return result
 }
 
-// DrawRoundedCorners 在原图上直接绘制圆角，圆角外设为白色
-// 这是简化版本：根据已知圆角半径和边距调整
-func DrawRoundedCorners(img *image.RGBA, radius int) *image.RGBA {
+// DrawRoundedCornersBG 在原图上绘制圆角，圆角外用 bgColor 填充
+// PNG 输出传 color.Transparent（四角透明），JPEG 输出传 color.White（四角白色）
+func DrawRoundedCornersBG(img *image.RGBA, radius int, bgColor color.Color) *image.RGBA {
 	mask := CreateRoundedCornerMask(img.Bounds().Dx(), img.Bounds().Dy(), radius)
-	return ApplyMask(img, mask, color.White)
+	return ApplyMask(img, mask, bgColor)
+}
+
+// DrawRoundedCorners 在原图上直接绘制圆角，圆角外设为白色（JPEG 输出，无透明通道）
+func DrawRoundedCorners(img *image.RGBA, radius int) *image.RGBA {
+	return DrawRoundedCornersBG(img, radius, color.White)
 }
